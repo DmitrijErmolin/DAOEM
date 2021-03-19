@@ -54,6 +54,7 @@ def connect():
         user.update({Nodes.is_available: True})
         session.commit()
         node = Node(user.all()[0].ip_address, user.all()[0].port)
+        node.id = public_key
         node.start()
     session.close()
     return users, public_key, node
