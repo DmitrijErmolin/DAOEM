@@ -73,14 +73,13 @@ def get_connect(public_key, my_node):
     my_node.connect_with_node(outbound_user[0].ip_address, outbound_user[0].port)
 
 
-def disconnect(public_key):
+def disconnect(public_key, my_node):
     public_keys = RSA.importKey(binascii.unhexlify(public_key))
     session = Session()
     session.query(Nodes).filter(Nodes.public_key == binascii.hexlify(public_keys.export_key(format="DER")).decode('ascii')).update(
         {Nodes.is_available: False})
     print("Disconnected")
-    # TODO
-    # close your own connect
+    my_node.stop()
     session.commit()
     session.close()
 
@@ -133,7 +132,7 @@ if __name__ == '__main__':
                         if user.public_key != id[1]:
                             get_connect(user.public_key, node)
                 if answer == 4:
-                    disconnect(id[1])
+                    disconnect(id[1], node)
                     break
 
 
