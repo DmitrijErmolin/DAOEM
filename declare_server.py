@@ -6,6 +6,7 @@ from Crypto import Random
 import random
 import binascii
 from p2pnetwork.node import Node
+import blockchain
 engine = create_engine("postgresql://postgres:dmitrij@localhost/auth_server")
 Base = declarative_base(bind=engine)
 session_factory = sessionmaker(bind=engine)
