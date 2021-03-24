@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, String, BOOLEAN, INTEGER
+from sqlalchemy import create_engine, Column, String, BOOLEAN, INTEGER, FLOAT
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, scoped_session
 from Crypto.PublicKey import RSA
@@ -9,8 +9,6 @@ import binascii
 from p2pnetwork.node import Node
 from sqlalchemy.orm.exc import NoResultFound
 from sqlalchemy.sql import and_
-import blockchain
-import rating
 engine = create_engine("postgresql://postgres:dmitrij@localhost/auth_server")
 Base = declarative_base(bind=engine)
 session_factory = sessionmaker(bind=engine)
@@ -24,6 +22,7 @@ class Nodes(Base):
     ip_address = Column(String(15))
     port = Column(INTEGER, unique=True)
     is_available = Column(BOOLEAN, default=False)
+    rating = Column(FLOAT)
 
     def __str__(self):
         return f"(ip={self.ip_address}, port = {self.port})"
@@ -42,6 +41,7 @@ def create_rsa():
 def register():
     login = input("Please input login:").encode()
     password = input("Please input password:").encode()
+    #TODO #add check exicting login
     login_hash = SHA3_512.new(login)
     password_hash = SHA3_512.new(password)
     ip_address = "localhost"
@@ -80,7 +80,6 @@ def connect():
             keys = create_rsa()
             print("Here is your private key, save it\n", keys[1])
             print("Here is your public key, save it\n", keys[0])
-            print("Here is your network config:", user.one().ip_address, user.one().port)
             node = Node(user.one().ip_address, user.one().port)
             node.id = keys[0]
             node.start()
@@ -93,6 +92,13 @@ def get_nodes():
     nodes = session.query(Nodes).filter(Nodes.is_available == True).all()
     session.close()
     return nodes
+
+
+def update_rating(node, rating):
+    session = Session()
+    session.query(Nodes).filter(and_(Nodes.ip_address == node.host, Nodes.port == node.port)).update({Nodes.rating: rating})
+    session.commit()
+    session.close()
 
 
 def get_connect(ip_address, port, my_node):
@@ -110,41 +116,6 @@ def disconnect(my_node):
     session.commit()
     session.close()
 
-
-if __name__ == '__main__':
-    # Base.metadata.create_all()
-    # register()
-    check = connect()
-    if check is not None:
-        print("Ok")
-        while True:
-            try:
-                answer = int(input('''
-                Press 1 to get all nodes \n
-                Press 2 to connect\n
-                Press 3 to get_all_connect\n
-                Press 4 to disconnect \n
-                '''))
-            except ValueError:
-                print("Invalid input")
-            else:
-                if answer == 1:
-                    users = get_nodes()
-                    print(users)
-                if answer == 2:
-                    ip_address = input("Input address_to_connect:")
-                    port = input("Input address_to_connect:")
-                    get_connect(ip_address, port, check)
-                if answer == 3:
-                    users = get_nodes()
-                    for user in users:
-                        if user.ip_address != check.host and user.port != check.host:
-                            get_connect(user.ip_address, user.port, check)
-                if answer == 4:
-                    disconnect(check)
-                    break
-    else:
-        print("Something wrong")
 
 
 
