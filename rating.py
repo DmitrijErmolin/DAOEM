@@ -2,8 +2,7 @@ import time
 
 
 class RatingBase:
-    def __init__(self, name):
-        self.name = name
+    def __init__(self):
         self.parameters = dict()
         self.parameters['default'] = 0
         self.user_rating = 0
@@ -71,24 +70,6 @@ class RatingBase:
     def stop_superuser(self):
         self.parameters['superuser'] = False
 
-
-if __name__ == '__main__':
-
-    test = RatingBase("12")
-    print(test)
-    print()
-    for i in range(20):
-        test.update_user_rating_per_gen()
-        print(test)
-    for i in range(25):
-        test.update_user_rating_per_gen(down_rate=True)
-        print(test)
-    for i in range(25):
-        test.update_user_rating_per_git()
-        print(test)
-    for i in range(40):
-        test.update_user_rating_per_gen(down_rate=True)
-        print(test)
 
 
 
