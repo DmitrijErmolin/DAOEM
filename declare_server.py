@@ -65,14 +65,14 @@ def connect():
     except NoResultFound:
         print("Wrong login")
         session.close()
-        return False, []
+        return None
     else:
         try:
             session.query(Nodes).filter(Nodes.password == password_hash.hexdigest()).one()
         except NoResultFound:
             print("Wrong password")
             session.close()
-            return False, []
+            return None
         else:
             user = session.query(Nodes).filter(Nodes.login == login_hash.hexdigest())
             user.update({Nodes.is_available: True})
@@ -85,7 +85,7 @@ def connect():
             node.id = keys[0]
             node.start()
             session.close()
-            return True, node
+            return node
 
 
 def get_nodes():
@@ -115,35 +115,36 @@ if __name__ == '__main__':
     # Base.metadata.create_all()
     # register()
     check = connect()
-    if check[0]:
+    if check is not None:
         print("Ok")
+        while True:
+            try:
+                answer = int(input('''
+                Press 1 to get all nodes \n
+                Press 2 to connect\n
+                Press 3 to get_all_connect\n
+                Press 4 to disconnect \n
+                '''))
+            except ValueError:
+                print("Invalid input")
+            else:
+                if answer == 1:
+                    users = get_nodes()
+                    print(users)
+                if answer == 2:
+                    ip_address = input("Input address_to_connect:")
+                    port = input("Input address_to_connect:")
+                    get_connect(ip_address, port, check)
+                if answer == 3:
+                    users = get_nodes()
+                    for user in users:
+                        if user.ip_address != check.host and user.port != check.host:
+                            get_connect(user.ip_address, user.port, check)
+                if answer == 4:
+                    disconnect(check)
+                    break
     else:
         print("Something wrong")
-    while True:
-        try:
-            answer = int(input('''
-            Press 1 to get all nodes \n
-            Press 2 to connect\n
-            Press 3 to get_all_connect\n
-            Press 4 to disconnect \n
-            '''))
-        except ValueError:
-            print("Invalid input")
-        else:
-            if answer == 1:
-                users = get_nodes()
-                print(users)
-            if answer == 2:
-                ip_address = input("Input address_to_connect:")
-                port = input("Input address_to_connect:")
-                get_connect(ip_address, port, check[1])
-            if answer == 3:
-                users = get_nodes()
-                for user in users:
-                    if user.ip_address != check[1].host and user.port != check[1].host:
-                        get_connect(user.ip_address, user.port, check[1])
-            if answer == 4:
-                disconnect(check[1])
-                break
+
 
 
