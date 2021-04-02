@@ -1,5 +1,6 @@
 from sqlalchemy import create_engine, Column, String, BOOLEAN, INTEGER, FLOAT
 from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.sql.expression import desc
 from sqlalchemy.orm import sessionmaker, scoped_session
 from Crypto.PublicKey import RSA
 from Crypto.Hash import SHA3_512
@@ -9,6 +10,7 @@ import binascii
 from p2pnetwork.node import Node
 from sqlalchemy.orm.exc import NoResultFound
 from sqlalchemy.sql import and_
+from argparse import ArgumentParser
 engine = create_engine("postgresql://postgres:dmitrij@localhost/auth_server")
 Base = declarative_base(bind=engine)
 session_factory = sessionmaker(bind=engine)
@@ -23,9 +25,10 @@ class Nodes(Base):
     port = Column(INTEGER, unique=True)
     is_available = Column(BOOLEAN, default=False)
     rating = Column(FLOAT)
+    id = Column(String())
 
     def __str__(self):
-        return f"(ip={self.ip_address}, port = {self.port})"
+        return f"(ip={self.ip_address}, port = {self.port}, rating ={self.rating})"
 
     def __repr__(self):
         return str(self)
@@ -41,11 +44,10 @@ def create_rsa():
 def register():
     login = input("Please input login:").encode()
     password = input("Please input password:").encode()
-    #TODO #add check exicting login
     login_hash = SHA3_512.new(login)
     password_hash = SHA3_512.new(password)
     ip_address = "localhost"
-    port = random.randint(10000, 10005)
+    port = random.randint(10000, 10049)
     u = Nodes(login=login_hash.hexdigest(), password=password_hash.hexdigest(), ip_address=ip_address, port=port, is_available=False)
     session = Session()
     session.add(u)
@@ -54,16 +56,25 @@ def register():
     return True
 
 
-def connect():
-    login = input("Please input login:").encode()
-    password = input("Please input password:").encode()
+def connect(serv=False):
+    if not serv:
+        login = input("Please input login:").encode()
+        password = input("Please input password:").encode()
+    else:
+        login = "admin".encode()
+        password = "admin".encode()
     login_hash = SHA3_512.new(login)
     password_hash = SHA3_512.new(password)
     session = Session()
     try:
         session.query(Nodes).filter(Nodes.login == login_hash.hexdigest()).one()
     except NoResultFound:
-        print("Wrong login")
+        if not serv:
+            print("Wrong login")
+        else:
+            server = Nodes(login=login_hash.hexdigest(), password=password_hash.hexdigest(), ip_address="localhost", port=10050, is_available=False)
+            session.add(server)
+            session.commit()
         session.close()
         return None
     else:
@@ -75,21 +86,26 @@ def connect():
             return None
         else:
             user = session.query(Nodes).filter(Nodes.login == login_hash.hexdigest())
-            user.update({Nodes.is_available: True})
-            session.commit()
             keys = create_rsa()
             print("Here is your private key, save it\n", keys[1])
             print("Here is your public key, save it\n", keys[0])
-            node = Node(user.one().ip_address, user.one().port)
-            node.id = keys[0]
+            node = Node(user.one().ip_address, user.one().port, keys[0])
             node.start()
+            user.update({Nodes.is_available: True, Nodes.id: keys[0]})
+            session.commit()
             session.close()
             return node
 
 
-def get_nodes():
+
+def get_nodes(my_node, server=False):
     session = Session()
-    nodes = session.query(Nodes).filter(Nodes.is_available == True).all()
+    if not server:
+        nodes = session.query(Nodes).filter(and_(Nodes.is_available == True, Nodes.port != my_node.port)).all()
+    else:
+        query =session.query(Nodes)
+        desc_xp = desc(Nodes.rating)
+        nodes = query.filter(and_(Nodes.is_available == True, Nodes.rating.isnot(None))).order_by(desc_xp).all()
     session.close()
     return nodes
 
@@ -115,6 +131,44 @@ def disconnect(my_node):
     my_node.stop()
     session.commit()
     session.close()
+
+
+if __name__ == '__main__':
+    # Base.metadata.create_all()
+    parser = ArgumentParser()
+    parser.add_argument('-p', '--port', default=10050, type=int, help='port to listen on')
+    parser.add_argument('-ht', "--host", default="localhost", type=str, help="ip_address to connect")
+    args = parser.parse_args()
+    port = args.port
+    host = args.host
+    session = Session()
+    try:
+        session.query(Nodes).filter(Nodes.port == port).one()
+    except NoResultFound:
+        server = Nodes(login="admin", password="admin", ip_address="localhost", port=10050, is_available=False)
+        session.add(server)
+        session.commit()
+        session.close()
+    else:
+        server = session.query(Nodes).filter(Nodes.login == "admin")
+        keys = create_rsa()
+        server_node = Node(host, port, keys[0])
+        server_node.start()
+        server.update({Nodes.is_available: True, Nodes.id: keys[0]})
+        session.commit()
+        session.close()
+        users = get_nodes(server_node)
+        for user in users:
+            if user.port != server_node.host:
+                get_connect(user.ip_address, user.port, server_node)
+        print(server_node.nodes_outbound)
+
+
+
+
+
+
+
 
 
 
