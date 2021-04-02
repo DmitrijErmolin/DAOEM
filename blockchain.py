@@ -1,127 +1,115 @@
-from collections import OrderedDict
+from hashlib import sha256
 
-import binascii
-from Crypto.Hash import SHA
-from Crypto.PublicKey import RSA
-from Crypto.Signature import PKCS1_v1_5
-
-import hashlib
-import json
-from time import time
-from urllib.parse import urlparse
-
-
-MINING_SENDER = "THE BLOCKCHAIN"
-MINING_REWARD = 1
-MINING_DIFFICULTY = 2
+from block import Block
+import time
 
 
 class Blockchain:
+    # difficulty of our PoW algorithm
+    difficulty = 2
 
-    def __init__(self,node_id):
-
-        self.transactions = []
+    def __init__(self):
+        self.unconfirmed_transactions = []
         self.chain = []
-        self.nodes = set()
-        self.node_id = node_id
-        self.create_block(0, '00')
+        # for validate transaction and return to user. like account in ethereum
+        self.open_surveys = {}
+        # for smart contract
+        self.chain_code = {'chain': self.chain, 'open_surveys': self.open_surveys,
+                           'unconfirmed_transactions': self.unconfirmed_transactions}
+        self.create_genesis_block()
 
-    def register_node(self, node_url):
-        parsed_url = urlparse(node_url)
-        if parsed_url.netloc:
-            self.nodes.add(parsed_url.netloc)
-        elif parsed_url.path:
-            self.nodes.add(parsed_url.path)
-        else:
-            raise ValueError('Invalid URL')
+    @staticmethod
+    def fromList(chain):
+        blockchain = Blockchain()
+        blockchain.unconfirmed_transactions = []
+        blockchain.chain = []
 
-    def verify_transaction_signature(self, sender_address, signature, transaction):
-        public_key = RSA.importKey(binascii.unhexlify(sender_address))
-        verifier = PKCS1_v1_5.new(public_key)
-        h = SHA.new(str(transaction).encode('utf8'))
-        return verifier.verify(h, binascii.unhexlify(signature))
+        for block in chain:
+            blockchain.chain.append(Block.fromDict(block))
 
-    def submit_transaction(self, sender_address, recipient_address, value, signature):
+        return blockchain
 
-        transaction = OrderedDict({'sender_address': sender_address,
-                                   'recipient_address': recipient_address,
-                                   'value': value})
+    def create_genesis_block(self):
+        """
+        A function to generate genesis block and appends it to
+        the chain. The block has index 0, previous_hash as 0, and
+        a valid hash.
+        """
+        genesis_block = Block(0, [], time.time(), "0")
+        # proof of work to init
+        self.proof_of_work(genesis_block)
 
-        if sender_address == MINING_SENDER:
-            self.transactions.append(transaction)
-            return len(self.chain) + 1
-        else:
-            transaction_verification = self.verify_transaction_signature(sender_address, signature, transaction)
-            if transaction_verification:
-                self.transactions.append(transaction)
-                return len(self.chain) + 1
-            else:
-                return False
+        genesis_block.hash = genesis_block.compute_hash()
 
-    def create_block(self, nonce, previous_hash):
+        self.chain.append(genesis_block)
 
-        block = {'block_number': len(self.chain) + 1,
-                 'timestamp': time(),
-                 'transactions': self.transactions,
-                 'nonce': nonce,
-                 'previous_hash': previous_hash}
+    @property
+    def last_block(self):
+        return self.chain[-1]
 
-        self.transactions = []
+    def add_block(self, block, proof):
+        """
+        A function that adds the block to the chain after verification.
+        Verification includes:
+        * Checking if the proof is valid.
+        * The previous_hash referred in the block and the hash of latest block
+          in the chain match.
+        """
+        previous_hash = self.last_block.hash
 
+        if previous_hash != block.previous_hash:
+            return False
+
+        if not Blockchain.is_valid_proof(block, proof):
+            return False
+
+        block.hash = proof
         self.chain.append(block)
-        return block
-
-    def hash(self, block):
-        block_string = json.dumps(block, sort_keys=True).encode()
-        return hashlib.sha256(block_string).hexdigest()
-
-    def proof_of_work(self):
-        """
-        Proof of work algorithm
-        """
-        last_block = self.chain[-1]
-        last_hash = self.hash(last_block)
-
-        nonce = 0
-        while self.valid_proof(self.transactions, last_hash, nonce) is False:
-            nonce += 1
-
-        return nonce
-
-    def valid_proof(self, transactions, last_hash, nonce, difficulty=MINING_DIFFICULTY):
-        guess = (str(transactions) + str(last_hash) + str(nonce)).encode()
-        guess_hash = hashlib.sha256(guess).hexdigest()
-        return guess_hash[:difficulty] == '0' * difficulty
-
-    def valid_chain(self, chain):
-        last_block = chain[0]
-        current_index = 1
-
-        while current_index < len(chain):
-            block = chain[current_index]
-            if block['previous_hash'] != self.hash(last_block):
-                return False
-
-            transactions = block['transactions'][:-1]
-            transaction_elements = ['sender_address', 'recipient_address', 'value']
-            transactions = [OrderedDict((k, transaction[k]) for k in transaction_elements) for transaction in
-                            transactions]
-
-            if not self.valid_proof(transactions, block['previous_hash'], block['nonce'], MINING_DIFFICULTY):
-                return False
-
-            last_block = block
-            current_index += 1
-
         return True
 
+    def proof_of_work(self, block):
+        """
+        Function that tries different values of nonce to get a hash
+        that satisfies our difficulty criteria.
+        """
+        block.nonce = 0
 
+        computed_hash = block.compute_hash()
+        while not computed_hash.startswith('0' * Blockchain.difficulty):
+            block.nonce += 1
+            computed_hash = block.compute_hash()
 
+        return computed_hash
 
+    def add_new_transaction(self, transaction):
+        self.unconfirmed_transactions.append(transaction)
 
+    @classmethod
+    def is_valid_proof(cls, block, block_hash):
+        """
+        Check if block_hash is valid hash of block and satisfies
+        the difficulty criteria.
+        """
 
+        return (block_hash.startswith('0' * Blockchain.difficulty) and
+                block_hash == block.compute_hash())
 
+    @classmethod
+    def check_chain_validity(cls, chain):
+        result = True
+        previous_hash = "0"
 
+        for block in chain:
+            block_hash = block.hash
+            # remove the hash field to recompute the hash again
+            # using `compute_hash` method.
+            delattr(block, "hash")
 
+            if not cls.is_valid_proof(block, block_hash) or \
+                    previous_hash != block.previous_hash:
+                result = False
+                break
 
+            block.hash, previous_hash = block_hash, block_hash
 
+        return result
