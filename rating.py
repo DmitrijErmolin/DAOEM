@@ -6,7 +6,7 @@ class RatingBase:
         self.parameters = dict()
         self.parameters['default'] = 0
         self.user_rating = 0
-        self.parameters['rang'] = 'Common user'
+        self.parameters['rang'] = 'Common'
         self.parameters['precision_per_active'] = 0.001
         self.parameters['precision_per_generate'] = 0.5
         self.parameters['precision_per_git'] = 1

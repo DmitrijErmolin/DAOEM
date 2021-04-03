@@ -48,8 +48,9 @@ class Server:
                 pass
             else:
                 print(node.host, node.port)
+                self.node.send_to_node(node, json.dumps(
+                    {"command": "-send_rep"}))
         print(self.validators)
-
 
     def update_users(self):
         users = declare_server.get_nodes(self.node)
@@ -124,6 +125,34 @@ class Server:
                 print("something wrong")
         return "Success", 201
 
+    def announce_new_block(self, data):
+        bloc = block.Block.fromDict(data)
+        if not bloc:
+            return "Invalid data at announce_new_block", 400
+        block_to_send = json.dumps(bloc.__dict__)
+        print(block_to_send)
+        for peer in self.node.nodes_outbound:
+            try:
+                self.node.send_to_node(peer, json.dumps(
+                    {"command": "-send_block", "data": block_to_send}))
+            except socket.error:
+                print("something wrong")
+        return "Success", 201
+
+    def announce_gen_block(self):
+        data = self.blockchain.chain[0]
+        for peer in self.node.nodes_outbound:
+            try:
+                self.validators[peer.port] == peer.host
+            except KeyError:
+                pass
+            else:
+                try:
+                    self.node.send_to_node(peer, json.dumps(
+                        {"command": "-send_gen", "data": data.__dict__}))
+                except socket.error:
+                    print("something wrong")
+        return "Success", 201
 
     def get_transaction(self):
         required_fields = ["type", "content", "timestamp"]
@@ -145,7 +174,6 @@ class Server:
                       block_data["timestamp"],
                       block_data["previous_hash"],
                       block_data["nonce"])
-        print(bloc)
         tmp_open_surveys = self.blockchain.open_surveys
         tmp_chain_code = self.blockchain.chain_code
 
@@ -157,10 +185,8 @@ class Server:
 
         proof = block_data['hash']
         added = self.blockchain.add_block(bloc, proof)
-        print(added)
         if not added:
             return "The block was discarded by the node"
-        print(self.blockchain.chain)
         return "Block added to the chain"
 
     def compute_open_surveys(self, block, open_surveys):
@@ -194,6 +220,7 @@ if __name__ == '__main__':
     server = declare_server.connect(True)
     if server is not None:
         serv = Server(server)
+        serv.blockchain.create_genesis_block(None)
         while True:
             try:
                 answer = int(input('''  
@@ -202,12 +229,13 @@ if __name__ == '__main__':
                 Press 3 to choose validator users
                 Press 4 for new servers
                 Press 5 to disconnect
+                Press 8 to send genesis block to valid node
                 '''))
             except ValueError:
                 print("Invalid input")
             else:
                 if answer == 1:
-                   serv.update_users()
+                    serv.update_users()
                 if answer == 2:
                     serv.get_connected_users()
                 if answer == 3:
@@ -220,3 +248,5 @@ if __name__ == '__main__':
                     serv.get_transaction()
                 if answer == 7:
                     serv.validate_and_add_block()
+                if answer == 8:
+                    serv.announce_gen_block()

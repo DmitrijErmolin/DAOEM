@@ -16,7 +16,6 @@ class Blockchain:
         # for smart contract
         self.chain_code = {'chain': self.chain, 'open_surveys': self.open_surveys,
                            'unconfirmed_transactions': self.unconfirmed_transactions}
-        self.create_genesis_block()
 
     @staticmethod
     def fromList(chain):
@@ -29,19 +28,20 @@ class Blockchain:
 
         return blockchain
 
-    def create_genesis_block(self):
+    def create_genesis_block(self, other_gn_block):
         """
         A function to generate genesis block and appends it to
         the chain. The block has index 0, previous_hash as 0, and
         a valid hash.
         """
-        genesis_block = Block(0, [], time.time(), "0")
-        # proof of work to init
-        self.proof_of_work(genesis_block)
+        if other_gn_block is None:
+            genesis_block = Block(0, [], time.time(), "0")
+            self.proof_of_work(genesis_block)
 
-        genesis_block.hash = genesis_block.compute_hash()
-
-        self.chain.append(genesis_block)
+            genesis_block.hash = genesis_block.compute_hash()
+            self.chain.append(genesis_block)
+        else:
+            self.chain.append(other_gn_block)
 
     @property
     def last_block(self):
@@ -64,6 +64,7 @@ class Blockchain:
             return False
 
         block.hash = proof
+        print(block.hash)
         self.chain.append(block)
         return True
 

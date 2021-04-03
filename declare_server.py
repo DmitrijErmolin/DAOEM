@@ -86,7 +86,8 @@ def connect(serv=False):
             return None
         else:
             user = session.query(Nodes).filter(Nodes.login == login_hash.hexdigest())
-            keys = create_rsa()
+            keys = [str(random.randint(1, 10000000)), str(random.randint(10000001, 100000001))]
+            # keys = create_rsa()
             print("Here is your private key, save it\n", keys[1])
             print("Here is your public key, save it\n", keys[0])
             node = Node(user.one().ip_address, user.one().port, keys[0])
