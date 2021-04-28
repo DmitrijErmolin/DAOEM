@@ -6,6 +6,12 @@ import blockchain
 import socket
 import json
 import math
+import threading
+import random
+import networkx as nx
+import matplotlib.pyplot as plt
+import matplotlib.animation as animation
+from matplotlib import style
 
 class Server:
     def __init__(self, node):
@@ -15,6 +21,13 @@ class Server:
         self.blockchain = blockchain.Blockchain()
         self.amount_of_valid = 0
         self.validators = dict()
+        self.threads = []
+        self.start_listen()
+        self.time_for_vote = None
+        self.graph = nx.Graph()
+        self.figure = plt.figure()
+        self.show_plot()
+
 
     def __str__(self):
         return f"(node={self.node.host}, port = {self.node.port}, rating = {self.rating})"
@@ -47,19 +60,10 @@ class Server:
             except KeyError:
                 pass
             else:
-                print(node.host, node.port)
                 self.node.send_to_node(node, json.dumps(
                     {"command": "-send_rep"}))
+                self.announce_gen_block()
         print(self.validators)
-
-    def update_users(self):
-        users = declare_server.get_nodes(self.node)
-        for user in users:
-            if user.port != self.node.host:
-                declare_server.get_connect(user.ip_address, user.port, self.node)
-        for node in self.node.nodes_outbound:
-            self.node.send_to_node(node, json.dumps(
-                {"command": "-c", "host": self.node.host, "port": self.node.port}))
 
     def disconnect_to_all(self):
         users = self.node.nodes_outbound.copy()
@@ -69,14 +73,21 @@ class Server:
         declare_server.disconnect(self.node)
         self.node.stop()
 
+    def countdown(self, t):
+        while t:
+            time.sleep(1)
+            t -= 1
+        self.close_survey()
+
+
     def submit_textarea(self):
         author = self.node.id
-        questionid = input("Please input question ID")
-        question = input("Please input the question")
-        answersList = input("Please input the answers separated by |").split('|')
-        opening_time = int(input("Please input vote time")) * 60
+        questionid = "1"
+        question = "1"
+        answersList = "Yes|No".split("|")
+        opening_time = 120
         answers = {}
-
+        timestamp = time.time()
         for answer in answersList:
             answers[answer] = []
 
@@ -89,15 +100,102 @@ class Server:
                 'opening_time': opening_time,
                 'status': 'opening',
                 'author': author,
-                'timestamp': time.time()
+                'timestamp': timestamp,
+                'amount_of_people': 5
             }
         }
+        vote_thread = threading.Thread(target=self.countdown, args=(opening_time,),daemon=True)
+        vote_thread.start()
+        vote_thread.name = "Vote time"
+        self.threads.append(vote_thread)
+        self.time_for_vote = timestamp
+        self.choose_rating()
 
         self.new_transaction(post_object)
+
 
         # print(new_tx_address)
 
         return True
+
+    def close_survey(self):
+        """
+        Endpoint to create a new transaction via our application.
+        """
+        author = self.node.id
+        questionid = self.blockchain.unconfirmed_transactions[-1]['content']['questionid']
+
+        post_object = {
+            'type': 'close',
+            'content': {
+                'questionid': questionid,
+                'author': author,
+                'timestamp': time.time()
+            }
+        }
+        print(post_object)
+        # Submit a transaction
+        self.new_transaction(post_object)
+
+        return True
+
+    def ping_users(self):
+        while True:
+            if self.node.nodes_outbound:
+                for node in self.node.nodes_outbound:
+                    result = self.node.send_to_node(node, json.dumps({"command": "p"}))
+                    self.node.delete_closed_connections()
+                    if not result:
+                        declare_server.disconnect_other(node)
+                    else:
+                        declare_server.update(node)
+            else:
+                nodes = declare_server.get_nodes(self.node)
+                for node in nodes:
+                    declare_server.disconnect_other(node, by_p2p=False)
+
+    def get_block(self):
+        while True:
+            time.sleep(5)
+            if self.blockchain.chain:
+                if self.node.recieved_block:
+                    self.validate_and_add_block()
+
+    def start_listen(self):
+        get_ping = threading.Thread(target=self.ping_users)
+        get_ping.name = "Ping"
+        get_graph = threading.Thread(target=self.plot_graph)
+        get_graph.name ="Graph"
+        get_graph.start()
+        # get_block = threading.Thread(target=self.get_block)
+        # get_block.name = "Get block"
+        # get_block.start()
+        get_ping.start()
+        self.threads.extend([get_ping])
+
+    def plot_graph(self):
+        while True:
+            time.sleep(5)
+            if self.node.recieved_graph:
+                for graph in self.node.recieved_graph:
+                    graph_new_node = graph.get('id')
+                    graph_conn_id = graph.get('conn_nodes')
+                    if graph_new_node not in self.graph:
+                        self.graph.add_node(graph_new_node)
+                        for edge in graph_conn_id:
+                            if not self.graph.has_edge(graph_new_node, edge):
+                                self.graph.add_edge(graph_new_node, edge)
+
+    def do_something_plot(self, i):
+        plt.clf()
+        plt.cla()
+        nx.draw_shell(self.graph, with_labels = True)
+
+    def show_plot(self):
+        ani = animation.FuncAnimation(self.figure, self.do_something_plot, interval=1000)
+        plt.ion()
+        plt.show()
+        plt.pause(0.001)
 
     def new_transaction(self, post):
         tx_data = post
@@ -116,11 +214,19 @@ class Server:
     def announce_new_transaction(self, data):
         if not data:
             return "Invalid data at announce_new_block", 400
-        print(data)
+        data_to_send = json.dumps(data)
+        for peer in self.validators:
+            try:
+                time.sleep(random.randint(1, 3))
+                self.node.send_to_node(peer, json.dumps(
+                    {"command": "-send", "data": data_to_send}))
+            except socket.error:
+                print("something wrong")
         for peer in self.node.nodes_outbound:
             try:
+                time.sleep(random.randint(1, 3))
                 self.node.send_to_node(peer, json.dumps(
-                    {"command": "-send", "data": data}))
+                    {"command": "-send", "data": data_to_send}))
             except socket.error:
                 print("something wrong")
         return "Success", 201
@@ -130,7 +236,6 @@ class Server:
         if not bloc:
             return "Invalid data at announce_new_block", 400
         block_to_send = json.dumps(bloc.__dict__)
-        print(block_to_send)
         for peer in self.node.nodes_outbound:
             try:
                 self.node.send_to_node(peer, json.dumps(
@@ -217,36 +322,32 @@ class Server:
 
 
 if __name__ == '__main__':
-    server = declare_server.connect(True)
+    server = declare_server.connect(serv=True)
     if server is not None:
         serv = Server(server)
         serv.blockchain.create_genesis_block(None)
         while True:
+
             try:
                 answer = int(input('''  
-                Press 1 to update users
                 Press 2 to show users
-                Press 3 to choose validator users
                 Press 4 for new servers
                 Press 5 to disconnect
-                Press 8 to send genesis block to valid node
+                Press 9 to close servers
                 '''))
             except ValueError:
                 print("Invalid input")
             else:
-                if answer == 1:
-                    serv.update_users()
                 if answer == 2:
                     serv.get_connected_users()
-                if answer == 3:
-                    serv.choose_rating()
                 if answer == 4:
                     serv.submit_textarea()
                 if answer == 5:
                     serv.disconnect_to_all()
-                if answer == 6:
-                    serv.get_transaction()
+                    break
                 if answer == 7:
                     serv.validate_and_add_block()
                 if answer == 8:
-                    serv.announce_gen_block()
+                    print(serv.blockchain.chain)
+                if answer == 9:
+                    serv.close_survey()

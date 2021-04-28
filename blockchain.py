@@ -64,7 +64,6 @@ class Blockchain:
             return False
 
         block.hash = proof
-        print(block.hash)
         self.chain.append(block)
         return True
 
@@ -102,8 +101,6 @@ class Blockchain:
 
         for block in chain:
             block_hash = block.hash
-            # remove the hash field to recompute the hash again
-            # using `compute_hash` method.
             delattr(block, "hash")
 
             if not cls.is_valid_proof(block, block_hash) or \

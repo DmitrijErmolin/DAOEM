@@ -1,4 +1,5 @@
 import rating
+import random
 import declare_server
 import time
 import datetime
@@ -6,6 +7,14 @@ import blockchain
 import socket
 import json
 import block
+import threading
+import logging
+import sys
+import coloredlogs
+
+
+
+
 
 
 class Client:
@@ -14,6 +23,18 @@ class Client:
         self.rating = rating.RatingBase()
         self.work_time = time.time()
         self.blockchain = blockchain.Blockchain()
+        self.node.sock.settimeout(5)
+        self.server_not_found = True
+        self.amount = 0
+        self.have_gen_block = False
+        self.voted = False
+        self.open = False
+        self.connect_to_server()
+        self.check_conn_to_serv()
+
+
+
+
 
     def __str__(self):
         return f"(node={self.node.host}, port = {self.node.port}, rating = {self.rating})"
@@ -25,17 +46,50 @@ class Client:
         end_time = time.time()
         return round(end_time - start_time)
 
-    def get_connected_users(self):
-        print(self.node.connected_id)
+    def connect_to_server(self):
+        while self.server_not_found:
+            node_server = declare_server.get_server()
+            if node_server is not None:
+                logger = logging.getLogger()
+                coloredlogs.install(level='Info', stream=sys.stdout, logger=logger)
+                logging.info("%s Success connected to server", self.node.id)
+                declare_server.get_connect(node_server.ip_address, node_server.port, self.node)
+                for serv_node in self.node.nodes_outbound:
+                    if serv_node.host == node_server.ip_address and serv_node.port == node_server.port:
+                        self.node.send_to_node(serv_node, json.dumps(
+                    {"command": "-c", "host": self.node.host, "port": self.node.port}))
+                get_users = threading.Thread(target=self.get_connect_to_user)
+                get_users.start()
+                self.server_not_found = False
+            else:
+                logger = logging.getLogger()
+                coloredlogs.install(level='Info', stream=sys.stdout, logger=logger)
+                logging.info("User %s cannot find server", self.node.id)
 
-    def update_users(self):
-        users = declare_server.get_nodes(self.node)
-        for user in users:
-            if user.port != self.node.host:
-                declare_server.get_connect(user.ip_address, user.port, self.node)
-        for node in self.node.nodes_outbound:
-            self.node.send_to_node(node, json.dumps(
-                {"command": "-c", "host": self.node.host, "port": self.node.port}))
+    def check_conn_to_serv(self):
+        while self.server_not_found:
+            time.sleep(1)
+        self.start_listen()
+
+    def get_connect_to_user(self):
+        while len(self.node.connected_id) < 3 and len(self.node.nodes_inbound) < 2:
+            random_connect_numb = random.randint(1, 2)
+            users = declare_server.get_nodes(self.node)
+            for i in range(random_connect_numb):
+                time.sleep(1)
+                if users:
+                    random_user = random.choice(users)
+                    if random_user.id not in self.node.connected_id:
+                        declare_server.get_connect(random_user.ip_address, random_user.port, self.node)
+                        for node in self.node.nodes_outbound:
+                            if random_user.ip_address == node.host and random_user.port == node.port:
+                                logger = logging.getLogger()
+                                coloredlogs.install(level='Info', stream=sys.stdout, logger=logger)
+                                logging.info("User %s connected to user %s", self.node.id, random_user.id)
+                                self.node.send_to_node(node, json.dumps(
+                                    {"command": "-c", "host": self.node.host, "port": self.node.port}))
+
+
 
     def disconnect_to_all(self):
         users = self.node.nodes_outbound.copy()
@@ -46,38 +100,109 @@ class Client:
         self.node.stop()
 
     def get_transaction(self):
-        if self.node.recieved_data is not None:
-            required_fields = ["type", "content", "timestamp"]
-            for field in required_fields:
-                if not self.node.recieved_data.get(field):
-                   print("Invalid transaction data", 404)
-            self.blockchain.add_new_transaction(self.node.recieved_data)
-        else:
-            print("Not available servers")
+        time.sleep(1)
+        if self.node.recieved_data:
+            dat = json.loads(self.node.recieved_data[-1])
+            if dat not in self.blockchain.unconfirmed_transactions:
+                required_fields = ["type", "content", "timestamp"]
+                for field in required_fields:
+                    if not dat.get(field):
+                       print("Invalid transaction data", 404)
+                if self.node.set_validation_user is False:
+                    if dat['type'].lower() == 'open':
+                        if not self.voted:
+                            self.vote(dat)
+                            self.voted = True
+                        del self.node.recieved_data[-1]
+                    if dat['type'].lower() == 'vote':
+                        self.announce_new_transaction(dat)
+                        del self.node.recieved_data[-1]
+                else:
+                    if dat['type'].lower() == 'open':
+                        logger = logging.getLogger()
+                        coloredlogs.install(level='Info', stream=sys.stdout, logger=logger)
+                        logging.info("User %s get transaction %s", self.node.id, dat)
+                        self.amount = dat['content']['amount_of_people']
+                        self.open = True
+                        self.blockchain.add_new_transaction(dat)
+                        del self.node.recieved_data[-1]
+                    if dat['type'].lower() == 'vote':
+                        if self.open:
+                            if dat not in self.blockchain.unconfirmed_transactions:
+                                logger = logging.getLogger()
+                                coloredlogs.install(level='Info', stream=sys.stdout, logger=logger)
+                                logging.info("User %s get transaction %s", self.node.id, dat)
+                                self.blockchain.add_new_transaction(dat)
+                                del self.node.recieved_data[-1]
+                            if len(self.blockchain.unconfirmed_transactions) == self.amount:
+                                self.mine_unconfirmed_transactions()
+            else:
+                del self.node.recieved_data[-1]
+
+    def listen(self):
+        while True:
+            self.get_transaction()
+            if self.node.set_validation_user and self.have_gen_block is False:
+                self.get_gen_block()
+                self.have_gen_block = True
+
+
+    def update_rat(self):
+        while True:
+            work_time = time.time() - self.work_time
+            self.rating.update_user_rating_per_active(work_time)
+            declare_server.update_rating(self.node, self.rating.user_rating)
+
+    def update_user(self):
+        while True:
+            time.sleep(2)
+            for node in self.node.nodes_outbound:
+                if node.host == "localhost" and node.port == 49001:
+                    self.node.send_to_node(node, json.dumps(
+                        {"command": "-g", "id": self.node.id, "conn_nodes": list(self.node.connected_id)}))
+
+
+    def check_rang(self):
+        while True:
+            if self.node.set_validation_user is True:
+                self.rating.parameters['rang'] = 'Valid_note'
+            else:
+                pass
+
+    def start_listen(self):
+        get_tranc_t = threading.Thread(target=self.listen)
+        get_upd_rat = threading.Thread(target=self.update_rat)
+        get_users = threading.Thread(target=self.update_user)
+        get_rang = threading.Thread(target=self.check_rang)
+        get_users.start()
+        get_rang.start()
+        get_upd_rat.start()
+        get_tranc_t.start()
 
     def get_gen_block(self):
-        if not self.blockchain.chain:
-            block_data = block.Block.fromDict(self.node.recieved_gen)
-            self.blockchain.chain.append(block_data)
-        else:
-            print("You already have genesis block")
+        if self.node.set_validation_user is True:
+            if not self.blockchain.chain:
+                if self.node.recieved_gen:
+                    block_data = block.Block.fromDict(self.node.recieved_gen)
+                    self.blockchain.chain.append(block_data)
 
-    def vote(self):
-        author = self.node.id
-        questionid = self.blockchain.unconfirmed_transactions[-1]['content']['questionid']
-        answer = input("Enter your answer")
+    def vote(self, data):
+        if self.node.set_validation_user is False:
+            answer = ["Yes", "No"]
+            author = self.node.id
+            questionid = data['content']['questionid']
+            answer = random.choice(answer)
 
-        post_object = {
-            'type': 'vote',
-            'content': {
-                'questionid': questionid,
-                'author': author,
-                'vote': answer,
-                'timestamp': time.time()
+            post_object = {
+                'type': 'vote',
+                'content': {
+                    'questionid': questionid,
+                    'author': author,
+                    'vote': answer,
+                    'timestamp': time.time()
+                }
             }
-        }
-
-        self.new_transaction(post_object)
+            self.new_transaction(post_object)
 
     def new_transaction(self, post):
         required_fields = ["type", "content"]
@@ -86,19 +211,20 @@ class Client:
                 return "Invalid transaction data"
 
         post["timestamp"] = time.time()
-
-        self.blockchain.add_new_transaction(post)
+        if self.node.set_validation_user:
+            self.blockchain.add_new_transaction(post)
 
         self.announce_new_transaction(post)
 
     def announce_new_transaction(self, data):
         if not data:
             return "Invalid data at announce_new_block", 400
-        print(data)
+        data_to_send = json.dumps(data)
         for peer in self.node.nodes_outbound:
             try:
+                time.sleep(random.randint(1, 3))
                 self.node.send_to_node(peer, json.dumps(
-                    {"command": "-send", "data": data}))
+                    {"command": "-send", "data": data_to_send}))
             except socket.error:
                 print("something wrong")
 
@@ -117,17 +243,10 @@ class Client:
         return "Success"
 
     def mine_unconfirmed_transactions(self):
-        """
-        This function serves as an interface to add the pending
-        transactions to the blockchain by adding them to the block
-        and figuring out Proof Of Work.
-        """
-
         if not self.blockchain.unconfirmed_transactions:
             return {"response": "None transactions 0x001"}
 
         last_block = self.blockchain.last_block
-        print(last_block)
         new_block = block.Block(index=last_block.index + 1,
                           transactions=[],
                           timestamp=time.time(),
@@ -151,7 +270,8 @@ class Client:
         result = new_block.index
 
         if not result:
-            return "None transactions to mine 0x002"
+            return "None transactions to mine 0x003"
+        print("NEW BLOCK", new_block)
         return "Block #{} is mined.".format(result)
 
     def validate_transaction(self, transaction):
@@ -225,13 +345,9 @@ class Client:
                 return True
             return False
         return True
+    def get_connected_users_node(self):
+        print(self.node.connected_id)
 
-    def check_rang(self):
-        if self.node.set_validation_user is True:
-            self.rating.parameters['rang'] = 'Valid_note'
-            print("You became valid note")
-        else:
-            print(self.rating.parameters['rang'])
 
 
 
@@ -255,26 +371,16 @@ if __name__ == '__main__':
                     while True:
                         try:
                             if client.rating.parameters['rang'] == 'Common':
-                                answer = int(input('''  
-                                Press 1 to update users
+                                answer = int(input('''
                                 Press 2 to show time in system
-                                Press 3 to update rating
                                 Press 4 to show available users
                                 Press 5 to disconnect and close connection
-                                Press 6 to check your rang
-                                Press 7 to check new servers
-                                Press 8 to vote
                                 '''))
                             elif client.rating.parameters['rang'] == 'Valid_note':
-                                answer = int(input('''  
-                                Press 1 to update users
+                                answer = int(input('''
                                 Press 2 to show time in system
-                                Press 3 to update rating
                                 Press 4 to show available users
                                 Press 5 to disconnect and close connection
-                                Press 6 to check your rang
-                                Press 7 to check new servers
-                                Press 8 to vote
                                 Press 9 to mine unconfirmed transactions
                                 Press 10 to show blockchain
                                 Press 11 to get genesis_block
@@ -282,27 +388,18 @@ if __name__ == '__main__':
                         except ValueError:
                             print("Invalid input")
                         else:
-                            if answer == 1:
-                                client.update_users()
                             if answer == 2:
                                 work_time = client.get_time(client.work_time)
                                 print("You are in the system for ", str(datetime.timedelta(seconds=work_time)))
                             if answer == 3:
-                                work_time = client.get_time(client.work_time)
-                                client.rating.update_user_rating_per_active(work_time)
-                                print(client.rating.user_rating)
-                                declare_server.update_rating(client.node, client.rating.user_rating)
+                                print(round(client.rating.user_rating, 6))
                             if answer == 4:
                                 client.get_connected_users()
                             if answer == 5:
                                 client.disconnect_to_all()
                                 break
-                            if answer == 6:
-                                client.check_rang()
                             if answer == 7:
-                                client.get_transaction()
-                            if answer == 8:
-                                client.vote()
+                                print(client.blockchain.unconfirmed_transactions)
                             if answer == 9:
                                 print(client.mine_unconfirmed_transactions())
                             if answer == 10:

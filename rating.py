@@ -7,7 +7,7 @@ class RatingBase:
         self.parameters['default'] = 0
         self.user_rating = 0
         self.parameters['rang'] = 'Common'
-        self.parameters['precision_per_active'] = 0.001
+        self.parameters['precision_per_active'] = 0.0000001
         self.parameters['precision_per_generate'] = 0.5
         self.parameters['precision_per_git'] = 1
         self.parameters['superuser'] = False
@@ -62,7 +62,6 @@ class RatingBase:
             self.user_rating = self.parameters['up_limit_to_all_user']
         if self.user_rating < self.parameters['down_limit_to_all_user']:
             self.user_rating = self.parameters['down_limit_to_all_user']
-        self.user_rating = round(self.user_rating, 3)
 
     def become_superuser(self):
         self.parameters['superuser'] = True
