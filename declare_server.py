@@ -1,7 +1,7 @@
 from sqlalchemy import create_engine, Column, String, BOOLEAN, INTEGER, FLOAT
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.sql.expression import desc
-from sqlalchemy.orm import sessionmaker, scoped_session
+from sqlalchemy.orm import sessionmaker, scoped_session, load_only
 from Crypto.PublicKey import RSA
 from Crypto.Hash import SHA3_512
 from Crypto import Random
@@ -11,6 +11,7 @@ from p2pnetwork.node import Node
 from sqlalchemy.orm.exc import NoResultFound
 from sqlalchemy.sql import and_
 from argparse import ArgumentParser
+import time
 engine = create_engine("postgresql://postgres:dmitrij@localhost/auth_server", pool_size=100, max_overflow=0)
 Base = declarative_base(bind=engine)
 session_factory = sessionmaker(bind=engine)
@@ -51,11 +52,16 @@ def register(logi=None, passw=None):
     login_hash = SHA3_512.new(login)
     password_hash = SHA3_512.new(password)
     ip_address = "localhost"
-    port = random.randint(10000, 11000)
-    u = Nodes(login=login_hash.hexdigest(), password=password_hash.hexdigest(), ip_address=ip_address, port=port, is_available=False)
+    port = random.randint(10000, 60000)
     session = Session()
-    session.add(u)
-    session.commit()
+    try:
+        session.query(Nodes).filter(Nodes.login == login_hash.hexdigest()).one()
+    except NoResultFound:
+        u = Nodes(login=login_hash.hexdigest(), password=password_hash.hexdigest(), ip_address=ip_address, port=port, is_available=False, rating=0)
+        session.add(u)
+        session.commit()
+    else:
+        print("User in base")
     session.close()
     return True
 
@@ -117,6 +123,11 @@ def get_nodes(my_node, server=False):
     session.close()
     return nodes
 
+def get_nodes_for_base(my_node):
+    session = Session()
+    nodes = session.query(Nodes).filter(and_(Nodes.is_available == True, Nodes.port != my_node.port)).all()
+    session.close()
+    return nodes
 
 def get_server():
     session = Session()
@@ -131,10 +142,24 @@ def get_server():
 
 
 def update_rating(node, rating):
+    node_to_up = list(node)
+    for node_info in node_to_up:
+        if node_info == 'localhost':
+            hosted = node_info
+        if isinstance(node_info, int):
+            ported = node_info
     session = Session()
-    session.query(Nodes).filter(and_(Nodes.ip_address == node.host, Nodes.port == node.port)).update({Nodes.rating: rating})
-    session.commit()
-    session.close()
+    try:
+        session.query(Nodes).filter(
+            and_(Nodes.ip_address == hosted, Nodes.port == ported, Nodes.is_available == True)).one()
+    except NoResultFound as e:
+        session.close()
+    else:
+        session.query(Nodes).filter(
+            and_(Nodes.ip_address == hosted, Nodes.port == ported, Nodes.is_available == True)).update({Nodes.rating: Nodes.rating + (time.time() - rating) * 0.0000001}, synchronize_session=False)
+        session.commit()
+        session.close()
+
 
 
 def get_connect(ip_address, port, my_node):

@@ -11,8 +11,10 @@ import random
 import networkx as nx
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
+import simplejson
 from matplotlib import style
-
+from sqlalchemy.ext.declarative import DeclarativeMeta
+from copy import deepcopy
 class Server:
     def __init__(self, node):
         self.node = node
@@ -22,11 +24,11 @@ class Server:
         self.amount_of_valid = 0
         self.validators = dict()
         self.threads = []
-        self.start_listen()
         self.time_for_vote = None
         self.graph = nx.Graph()
         self.figure = plt.figure()
         self.show_plot()
+        self.start_listen()
 
 
     def __str__(self):
@@ -42,13 +44,12 @@ class Server:
         print(self.blockchain.chain)
 
     def update_valid_amount(self, users):
-        self.amount_of_valid = math.ceil(len(users) * 0.15)
+        self.amount_of_valid = math.ceil(len(users) * 0.05)
 
     def choose_rating(self):
         self.validators.clear()
         users = declare_server.get_nodes(self.node, True)
         self.update_valid_amount(users)
-        print(users)
         for user in users[:self.amount_of_valid]:
             self.validators[user.port] = user.ip_address
         self.send_valid()
@@ -63,7 +64,6 @@ class Server:
                 self.node.send_to_node(node, json.dumps(
                     {"command": "-send_rep"}))
                 self.announce_gen_block()
-        print(self.validators)
 
     def disconnect_to_all(self):
         users = self.node.nodes_outbound.copy()
@@ -135,9 +135,26 @@ class Server:
         }
         print(post_object)
         # Submit a transaction
-        self.new_transaction(post_object)
+        # self.new_transaction(post_object)
 
         return True
+
+    def get_actual_base(self):
+        users_to_send = json.dumps(declare_server.get_nodes_for_base(self.node), cls=AlchemyEncoder)
+        for peer in self.node.nodes_outbound:
+            try:
+                self.node.send_to_node(peer, json.dumps(
+                    {"command": "-send_base", "data": users_to_send}))
+            except socket.error:
+                print("something wrong")
+
+    def update_rating(self):
+        while True:
+            time.sleep(5)
+            if self.node.timing:
+                nodes = deepcopy(self.node.timing)
+                for node in nodes:
+                    declare_server.update_rating(node, self.node.timing[node])
 
     def ping_users(self):
         while True:
@@ -165,8 +182,10 @@ class Server:
         get_ping = threading.Thread(target=self.ping_users)
         get_ping.name = "Ping"
         get_graph = threading.Thread(target=self.plot_graph)
-        get_graph.name ="Graph"
+        get_graph.name = "Graph"
         get_graph.start()
+        up_rate = threading.Thread(target=self.update_rating)
+        up_rate.start()
         # get_block = threading.Thread(target=self.get_block)
         # get_block.name = "Get block"
         # get_block.start()
@@ -215,13 +234,6 @@ class Server:
         if not data:
             return "Invalid data at announce_new_block", 400
         data_to_send = json.dumps(data)
-        for peer in self.validators:
-            try:
-                time.sleep(random.randint(1, 3))
-                self.node.send_to_node(peer, json.dumps(
-                    {"command": "-send", "data": data_to_send}))
-            except socket.error:
-                print("something wrong")
         for peer in self.node.nodes_outbound:
             try:
                 time.sleep(random.randint(1, 3))
@@ -321,6 +333,24 @@ class Server:
         return True
 
 
+class AlchemyEncoder(json.JSONEncoder):
+
+    def default(self, obj):
+        if isinstance(obj.__class__, DeclarativeMeta):
+            # an SQLAlchemy class
+            fields = {}
+            for field in [x for x in dir(obj) if not x.startswith('_') and x != 'metadata']:
+                data = obj.__getattribute__(field)
+                try:
+                    json.dumps(data) # this will fail on non-encodable values, like other classes
+                    fields[field] = data
+                except TypeError:
+                    fields[field] = None
+            # a json-encodable dict
+            return fields
+
+        return json.JSONEncoder.default(self, obj)
+
 if __name__ == '__main__':
     server = declare_server.connect(serv=True)
     if server is not None:
@@ -329,7 +359,8 @@ if __name__ == '__main__':
         while True:
 
             try:
-                answer = int(input('''  
+                answer = int(input('''
+                1 - base  
                 Press 2 to show users
                 Press 4 for new servers
                 Press 5 to disconnect
@@ -338,6 +369,8 @@ if __name__ == '__main__':
             except ValueError:
                 print("Invalid input")
             else:
+                if answer == 1:
+                    serv.get_actual_base()
                 if answer == 2:
                     serv.get_connected_users()
                 if answer == 4:

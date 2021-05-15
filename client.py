@@ -11,11 +11,7 @@ import threading
 import logging
 import sys
 import coloredlogs
-
-
-
-
-
+from collections import deque
 
 class Client:
     def __init__(self, node):
@@ -29,18 +25,19 @@ class Client:
         self.have_gen_block = False
         self.voted = False
         self.open = False
+        self.count_votes = 0
+        self.votes = 0
         self.connect_to_server()
-        self.check_conn_to_serv()
-
-
-
-
+        self.start_listen()
 
     def __str__(self):
         return f"(node={self.node.host}, port = {self.node.port}, rating = {self.rating})"
 
     def __repr__(self):
         return str(self)
+
+    def conn_people(self):
+        print(f"{self.node.id} connected to {self.node.connected_id}")
 
     def get_time(self, start_time):
         end_time = time.time()
@@ -53,43 +50,39 @@ class Client:
                 logger = logging.getLogger()
                 coloredlogs.install(level='Info', stream=sys.stdout, logger=logger)
                 logging.info("%s Success connected to server", self.node.id)
-                declare_server.get_connect(node_server.ip_address, node_server.port, self.node)
+                self.node.connect_with_node(node_server.ip_address, node_server.port)
                 for serv_node in self.node.nodes_outbound:
                     if serv_node.host == node_server.ip_address and serv_node.port == node_server.port:
                         self.node.send_to_node(serv_node, json.dumps(
-                    {"command": "-c", "host": self.node.host, "port": self.node.port}))
-                get_users = threading.Thread(target=self.get_connect_to_user)
-                get_users.start()
+                    {"command": "-c", "host": self.node.host, "port": self.node.port, "started": self.work_time}))
                 self.server_not_found = False
             else:
                 logger = logging.getLogger()
                 coloredlogs.install(level='Info', stream=sys.stdout, logger=logger)
                 logging.info("User %s cannot find server", self.node.id)
 
-    def check_conn_to_serv(self):
-        while self.server_not_found:
-            time.sleep(1)
-        self.start_listen()
-
     def get_connect_to_user(self):
-        while len(self.node.connected_id) < 3 and len(self.node.nodes_inbound) < 2:
-            random_connect_numb = random.randint(1, 2)
-            users = declare_server.get_nodes(self.node)
-            for i in range(random_connect_numb):
-                time.sleep(1)
-                if users:
-                    random_user = random.choice(users)
-                    if random_user.id not in self.node.connected_id:
-                        declare_server.get_connect(random_user.ip_address, random_user.port, self.node)
-                        for node in self.node.nodes_outbound:
-                            if random_user.ip_address == node.host and random_user.port == node.port:
-                                logger = logging.getLogger()
-                                coloredlogs.install(level='Info', stream=sys.stdout, logger=logger)
-                                logging.info("User %s connected to user %s", self.node.id, random_user.id)
-                                self.node.send_to_node(node, json.dumps(
-                                    {"command": "-c", "host": self.node.host, "port": self.node.port}))
-
-
+        if self.node.base:
+            while len(self.node.connected_id) < 3 and len(self.node.nodes_inbound) < 2:
+                random_connect_numb = random.randint(1, 2)
+                users = self.node.base
+                for i in range(random_connect_numb):
+                    time.sleep(1)
+                    if users:
+                        random_user = random.choice(users)
+                        if int(random_user[0]) not in self.node.connected_id:
+                            declare_server.get_connect(random_user[1], int(random_user[2]), self.node)
+                            for node in self.node.nodes_outbound:
+                                if random_user[1] == node.host and int(random_user[2]) == node.port:
+                                    logger = logging.getLogger()
+                                    coloredlogs.install(level='Info', stream=sys.stdout, logger=logger)
+                                    logging.info("User %s connected to user %s", self.node.id, int(random_user[0]))
+                                    self.node.send_to_node(node, json.dumps(
+                                        {"command": "-c", "host": self.node.host, "port": self.node.port}))
+        for node in self.node.nodes_outbound:
+            if node.host == "localhost" and node.port == 49001:
+                self.node.send_to_node(node, json.dumps(
+                    {"command": "-g", "id": self.node.id, "conn_nodes": list(self.node.connected_id)}))
 
     def disconnect_to_all(self):
         users = self.node.nodes_outbound.copy()
@@ -100,83 +93,55 @@ class Client:
         self.node.stop()
 
     def get_transaction(self):
-        time.sleep(1)
-        if self.node.recieved_data:
-            dat = json.loads(self.node.recieved_data[-1])
-            if dat not in self.blockchain.unconfirmed_transactions:
-                required_fields = ["type", "content", "timestamp"]
-                for field in required_fields:
-                    if not dat.get(field):
-                       print("Invalid transaction data", 404)
-                if self.node.set_validation_user is False:
-                    if dat['type'].lower() == 'open':
-                        if not self.voted:
-                            self.vote(dat)
-                            self.voted = True
-                        del self.node.recieved_data[-1]
-                    if dat['type'].lower() == 'vote':
-                        self.announce_new_transaction(dat)
-                        del self.node.recieved_data[-1]
-                else:
-                    if dat['type'].lower() == 'open':
-                        logger = logging.getLogger()
-                        coloredlogs.install(level='Info', stream=sys.stdout, logger=logger)
-                        logging.info("User %s get transaction %s", self.node.id, dat)
-                        self.amount = dat['content']['amount_of_people']
-                        self.open = True
+        while self.node.recieved_data:
+            dat = json.loads(self.node.recieved_data.popleft())
+            required_fields = ["type", "content", "timestamp"]
+            for field in required_fields:
+                if not dat.get(field):
+                   print("Invalid transaction data", 404)
+            if self.node.set_validation_user is False:
+                if dat['type'].lower() == 'open':
+                    if not self.voted:
+                        self.vote(dat)
+                        self.voted = True
+                if dat['type'].lower() == 'vote':
+                    if dat not in self.blockchain.unconfirmed_transactions:
                         self.blockchain.add_new_transaction(dat)
-                        del self.node.recieved_data[-1]
-                    if dat['type'].lower() == 'vote':
-                        if self.open:
-                            if dat not in self.blockchain.unconfirmed_transactions:
-                                logger = logging.getLogger()
-                                coloredlogs.install(level='Info', stream=sys.stdout, logger=logger)
-                                logging.info("User %s get transaction %s", self.node.id, dat)
-                                self.blockchain.add_new_transaction(dat)
-                                del self.node.recieved_data[-1]
-                            if len(self.blockchain.unconfirmed_transactions) == self.amount:
-                                self.mine_unconfirmed_transactions()
+                        self.announce_new_transaction(dat)
             else:
-                del self.node.recieved_data[-1]
+                if dat['type'].lower() == 'open':
+                    logger_open = logging.getLogger()
+                    logger_open.propagate = False
+                    coloredlogs.install(level='Info', stream=sys.stdout, logger=logger_open)
+                    logging.info("User %s get transaction %s", self.node.id, dat)
+                    self.amount = dat['content']['amount_of_people']
+                    self.open = True
+                    self.blockchain.add_new_transaction(dat)
+                if dat['type'].lower() == 'vote':
+                    if self.open:
+                        if dat not in self.blockchain.unconfirmed_transactions:
+                            logger_vote = logging.getLogger()
+                            logger_vote.propagate = False
+                            coloredlogs.install(level='Info', stream=sys.stdout, logger=logger_vote)
+                            logging.info("User %s get transaction %s", self.node.id, dat)
+                            self.blockchain.add_new_transaction(dat)
+                            self.count_votes += 1
+                            self.votes += 1
+                            logger_vote.info(f"Total votes {self.node.id} - {self.votes} ")
+                        if self.count_votes == self.amount:
+                            self.mine_unconfirmed_transactions()
+                            self.count_votes = 0
 
     def listen(self):
         while True:
+            time.sleep(1)
             self.get_transaction()
             if self.node.set_validation_user and self.have_gen_block is False:
                 self.get_gen_block()
                 self.have_gen_block = True
 
-
-    def update_rat(self):
-        while True:
-            work_time = time.time() - self.work_time
-            self.rating.update_user_rating_per_active(work_time)
-            declare_server.update_rating(self.node, self.rating.user_rating)
-
-    def update_user(self):
-        while True:
-            time.sleep(2)
-            for node in self.node.nodes_outbound:
-                if node.host == "localhost" and node.port == 49001:
-                    self.node.send_to_node(node, json.dumps(
-                        {"command": "-g", "id": self.node.id, "conn_nodes": list(self.node.connected_id)}))
-
-
-    def check_rang(self):
-        while True:
-            if self.node.set_validation_user is True:
-                self.rating.parameters['rang'] = 'Valid_note'
-            else:
-                pass
-
     def start_listen(self):
         get_tranc_t = threading.Thread(target=self.listen)
-        get_upd_rat = threading.Thread(target=self.update_rat)
-        get_users = threading.Thread(target=self.update_user)
-        get_rang = threading.Thread(target=self.check_rang)
-        get_users.start()
-        get_rang.start()
-        get_upd_rat.start()
         get_tranc_t.start()
 
     def get_gen_block(self):
@@ -203,6 +168,7 @@ class Client:
                 }
             }
             self.new_transaction(post_object)
+
 
     def new_transaction(self, post):
         required_fields = ["type", "content"]
@@ -345,8 +311,6 @@ class Client:
                 return True
             return False
         return True
-    def get_connected_users_node(self):
-        print(self.node.connected_id)
 
 
 
@@ -393,8 +357,6 @@ if __name__ == '__main__':
                                 print("You are in the system for ", str(datetime.timedelta(seconds=work_time)))
                             if answer == 3:
                                 print(round(client.rating.user_rating, 6))
-                            if answer == 4:
-                                client.get_connected_users()
                             if answer == 5:
                                 client.disconnect_to_all()
                                 break
