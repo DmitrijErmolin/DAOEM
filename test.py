@@ -6,11 +6,11 @@ import threading
 import matplotlib as plt
 users = []
 if __name__ == '__main__':
-    with open("test.txt", "r") as read_file:
+    with open("test1.txt", "r") as read_file:
         start = time.time()
         for line in read_file.readlines():
-            s = json.loads(line)
-            user = declare_server.connect(s.get('login'), s.get('password'))
+            s = line.split()
+            user = declare_server.connect(s[2], s[3])
             clint = client.Client(user)
             users.append(clint)
         time.sleep(10)

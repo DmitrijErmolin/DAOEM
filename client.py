@@ -12,7 +12,7 @@ import logging
 import sys
 import coloredlogs
 from collections import deque
-
+import argparse
 class Client:
     def __init__(self, node):
         self.node = node
@@ -25,6 +25,7 @@ class Client:
         self.have_gen_block = False
         self.voted = False
         self.open = False
+        self.get_people = False
         self.count_votes = 0
         self.votes = 0
         self.connect_to_server()
@@ -79,6 +80,7 @@ class Client:
                                     logging.info("User %s connected to user %s", self.node.id, int(random_user[0]))
                                     self.node.send_to_node(node, json.dumps(
                                         {"command": "-c", "host": self.node.host, "port": self.node.port}))
+        self.get_people = True
         for node in self.node.nodes_outbound:
             if node.host == "localhost" and node.port == 49001:
                 self.node.send_to_node(node, json.dumps(
@@ -108,6 +110,9 @@ class Client:
                     if dat not in self.blockchain.unconfirmed_transactions:
                         self.blockchain.add_new_transaction(dat)
                         self.announce_new_transaction(dat)
+                if dat['type'].lower() == 'close':
+                    if self.voted:
+                        self.voted = False
             else:
                 if dat['type'].lower() == 'open':
                     logger_open = logging.getLogger()
@@ -128,17 +133,23 @@ class Client:
                             self.count_votes += 1
                             self.votes += 1
                             logger_vote.info(f"Total votes {self.node.id} - {self.votes} ")
-                        if self.count_votes == self.amount:
+                        if self.count_votes == round(0.25 * self.amount):
                             self.mine_unconfirmed_transactions()
                             self.count_votes = 0
+                        elif self.votes == self.amount:
+                            self.mine_unconfirmed_transactions()
+                            self.count_votes = 0
+                            self.votes = 0
 
     def listen(self):
         while True:
-            time.sleep(1)
+            time.sleep(3)
             self.get_transaction()
             if self.node.set_validation_user and self.have_gen_block is False:
                 self.get_gen_block()
                 self.have_gen_block = True
+            if self.node.all_conn and not self.get_people:
+                self.get_connect_to_user()
 
     def start_listen(self):
         get_tranc_t = threading.Thread(target=self.listen)
@@ -316,59 +327,6 @@ class Client:
 
 
 if __name__ == '__main__':
-    while True:
-        try:
-            answer = int(input('''
-            Press 1 to sigIn \n
-            Press 2 to logIn\n
-            Press 3 to exit\n
-            '''))
-        except ValueError:
-            print("Invalid input")
-        else:
-            if answer == 1:
-                declare_server.register()
-            elif answer == 2:
-                user = declare_server.connect()
-                if user is not None:
-                    client = Client(user)
-                    while True:
-                        try:
-                            if client.rating.parameters['rang'] == 'Common':
-                                answer = int(input('''
-                                Press 2 to show time in system
-                                Press 4 to show available users
-                                Press 5 to disconnect and close connection
-                                '''))
-                            elif client.rating.parameters['rang'] == 'Valid_note':
-                                answer = int(input('''
-                                Press 2 to show time in system
-                                Press 4 to show available users
-                                Press 5 to disconnect and close connection
-                                Press 9 to mine unconfirmed transactions
-                                Press 10 to show blockchain
-                                Press 11 to get genesis_block
-                                '''))
-                        except ValueError:
-                            print("Invalid input")
-                        else:
-                            if answer == 2:
-                                work_time = client.get_time(client.work_time)
-                                print("You are in the system for ", str(datetime.timedelta(seconds=work_time)))
-                            if answer == 3:
-                                print(round(client.rating.user_rating, 6))
-                            if answer == 5:
-                                client.disconnect_to_all()
-                                break
-                            if answer == 7:
-                                print(client.blockchain.unconfirmed_transactions)
-                            if answer == 9:
-                                print(client.mine_unconfirmed_transactions())
-                            if answer == 10:
-                                print(client.blockchain.chain)
-                            if answer == 11:
-                                client.get_gen_block()
-
-            elif answer == 3:
-                break
+    user = declare_server.connect(sys.argv[1], sys.argv[2])
+    clint = Client(user)
 

@@ -22,6 +22,7 @@ class Server:
         self.work_time = time.time()
         self.blockchain = blockchain.Blockchain()
         self.amount_of_valid = 0
+        self.voted = set()
         self.validators = dict()
         self.threads = []
         self.time_for_vote = None
@@ -82,7 +83,7 @@ class Server:
 
     def submit_textarea(self):
         author = self.node.id
-        questionid = "1"
+        questionid = input("questid")
         question = "1"
         answersList = "Yes|No".split("|")
         opening_time = 120
@@ -90,7 +91,12 @@ class Server:
         timestamp = time.time()
         for answer in answersList:
             answers[answer] = []
-
+        vote_thread = threading.Thread(target=self.countdown, args=(opening_time,),daemon=True)
+        vote_thread.start()
+        vote_thread.name = "Vote time"
+        self.threads.append(vote_thread)
+        self.time_for_vote = timestamp
+        self.choose_rating()
         post_object = {
             'type': 'open',
             'content': {
@@ -101,16 +107,9 @@ class Server:
                 'status': 'opening',
                 'author': author,
                 'timestamp': timestamp,
-                'amount_of_people': 5
+                'amount_of_people': (len(self.node.connected_id) - len(self.validators))
             }
         }
-        vote_thread = threading.Thread(target=self.countdown, args=(opening_time,),daemon=True)
-        vote_thread.start()
-        vote_thread.name = "Vote time"
-        self.threads.append(vote_thread)
-        self.time_for_vote = timestamp
-        self.choose_rating()
-
         self.new_transaction(post_object)
 
 
@@ -133,9 +132,8 @@ class Server:
                 'timestamp': time.time()
             }
         }
-        print(post_object)
         # Submit a transaction
-        # self.new_transaction(post_object)
+        self.new_transaction(post_object)
 
         return True
 
@@ -186,9 +184,9 @@ class Server:
         get_graph.start()
         up_rate = threading.Thread(target=self.update_rating)
         up_rate.start()
-        # get_block = threading.Thread(target=self.get_block)
-        # get_block.name = "Get block"
-        # get_block.start()
+        get_block = threading.Thread(target=self.get_block)
+        get_block.name = "Get block"
+        get_block.start()
         get_ping.start()
         self.threads.extend([get_ping])
 
@@ -280,12 +278,20 @@ class Server:
 
         self.blockchain.add_new_transaction(self.node.recieved_data)
         self.node.recieved_data = None
-        print(self.blockchain.unconfirmed_transactions)
         return "Success"
 
-    def validate_and_add_block(self):
-        block_data = self.node.recieved_block
+    def check_end(self):
+        voted = 0
 
+        for every_vote in self.blockchain.open_surveys.values():
+            for ever_answer in every_vote['answers'].values():
+                voted += ever_answer
+        print(f"Total voted people:{voted}")
+        if voted == (len(self.node.connected_id) - len(self.validators)):
+            self.close_survey()
+
+    def validate_and_add_block(self):
+        block_data = self.node.recieved_block.popleft()
         bloc = block.Block(block_data["index"],
                       block_data["transactions"],
                       block_data["timestamp"],
@@ -293,21 +299,19 @@ class Server:
                       block_data["nonce"])
         tmp_open_surveys = self.blockchain.open_surveys
         tmp_chain_code = self.blockchain.chain_code
-
         if not self.compute_open_surveys(bloc, tmp_open_surveys):
             return "The block was discarded by the node"
-
         self.blockchain.open_surveys = tmp_open_surveys
         self.blockchain.chain_code = tmp_chain_code
-
         proof = block_data['hash']
         added = self.blockchain.add_block(bloc, proof)
+        self.check_end()
         if not added:
             return "The block was discarded by the node"
         return "Block added to the chain"
 
-    def compute_open_surveys(self, block, open_surveys):
-        for transaction in block.transactions:
+    def compute_open_surveys(self, blocked, open_surveys):
+        for transaction in blocked.transactions:
             if transaction['type'].lower() == 'open':
                 questionid = transaction['content']['questionid']
                 if questionid not in open_surveys:
@@ -326,11 +330,21 @@ class Server:
                     author = transaction['content']['author']
                     if author not in open_surveys[questionid]['answers'][vote]:
                         open_surveys[questionid]['answers'][vote].append(author)
-                        return True
+                else:
+                    return False
             else:
-                return True
-            return False
+                return False
         return True
+
+    def start_conn(self):
+        self.get_actual_base()
+        for peer in self.node.nodes_outbound:
+            try:
+                self.node.send_to_node(peer, json.dumps(
+                    {"command": "-start"}))
+            except socket.error:
+                print("something wrong")
+
 
 
 class AlchemyEncoder(json.JSONEncoder):
@@ -350,6 +364,7 @@ class AlchemyEncoder(json.JSONEncoder):
             return fields
 
         return json.JSONEncoder.default(self, obj)
+
 
 if __name__ == '__main__':
     server = declare_server.connect(serv=True)
@@ -373,6 +388,8 @@ if __name__ == '__main__':
                     serv.get_actual_base()
                 if answer == 2:
                     serv.get_connected_users()
+                if answer == 3:
+                    serv.start_conn()
                 if answer == 4:
                     serv.submit_textarea()
                 if answer == 5:
