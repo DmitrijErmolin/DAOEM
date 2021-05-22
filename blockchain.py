@@ -59,7 +59,6 @@ class Blockchain:
 
         if previous_hash != block.previous_hash:
             return False
-
         if not Blockchain.is_valid_proof(block, proof):
             return False
 

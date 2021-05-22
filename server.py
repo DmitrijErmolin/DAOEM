@@ -11,8 +11,9 @@ import random
 import networkx as nx
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
-import simplejson
-from matplotlib import style
+import logging
+import coloredlogs
+import sys
 from sqlalchemy.ext.declarative import DeclarativeMeta
 from copy import deepcopy
 class Server:
@@ -22,10 +23,12 @@ class Server:
         self.work_time = time.time()
         self.blockchain = blockchain.Blockchain()
         self.amount_of_valid = 0
+        self.percent = 0
         self.voted = set()
         self.validators = dict()
         self.threads = []
         self.time_for_vote = None
+        self.time_of_voting_end = None
         self.graph = nx.Graph()
         self.figure = plt.figure()
         self.show_plot()
@@ -45,7 +48,8 @@ class Server:
         print(self.blockchain.chain)
 
     def update_valid_amount(self, users):
-        self.amount_of_valid = math.ceil(len(users) * 0.05)
+        self.percent = 0.05
+        self.amount_of_valid = math.ceil(len(users) * self.percent)
 
     def choose_rating(self):
         self.validators.clear()
@@ -63,7 +67,7 @@ class Server:
                 pass
             else:
                 self.node.send_to_node(node, json.dumps(
-                    {"command": "-send_rep"}))
+                    {"command": "-send_rep", "data": list(self.validators.keys())}))
                 self.announce_gen_block()
 
     def disconnect_to_all(self):
@@ -74,16 +78,9 @@ class Server:
         declare_server.disconnect(self.node)
         self.node.stop()
 
-    def countdown(self, t):
-        while t:
-            time.sleep(1)
-            t -= 1
-        self.close_survey()
-
-
     def submit_textarea(self):
         author = self.node.id
-        questionid = input("questid")
+        questionid = "1"
         question = "1"
         answersList = "Yes|No".split("|")
         opening_time = 120
@@ -91,10 +88,6 @@ class Server:
         timestamp = time.time()
         for answer in answersList:
             answers[answer] = []
-        vote_thread = threading.Thread(target=self.countdown, args=(opening_time,),daemon=True)
-        vote_thread.start()
-        vote_thread.name = "Vote time"
-        self.threads.append(vote_thread)
         self.time_for_vote = timestamp
         self.choose_rating()
         post_object = {
@@ -110,6 +103,7 @@ class Server:
                 'amount_of_people': (len(self.node.connected_id) - len(self.validators))
             }
         }
+        time.sleep(3)
         self.new_transaction(post_object)
 
 
@@ -123,7 +117,7 @@ class Server:
         """
         author = self.node.id
         questionid = self.blockchain.unconfirmed_transactions[-1]['content']['questionid']
-
+        self.blockchain.open_surveys[questionid]['status'] = 'closed'
         post_object = {
             'type': 'close',
             'content': {
@@ -133,9 +127,19 @@ class Server:
             }
         }
         # Submit a transaction
+        print("Voting is ended")
+        self.time_of_voting_end = time.time()
+        logger_end = logging.getLogger()
+        logger_end.propagate = False
+        coloredlogs.install(level='Info', stream=sys.stdout, logger=logger_end)
+        logging.info(f"Result of voting {self.blockchain.open_surveys[questionid]['answers']}")
+        self.write_results()
         self.new_transaction(post_object)
-
         return True
+
+    def write_results(self):
+        with open("voting_time.txt", 'a') as file:
+            file.write(str(self.time_of_voting_end - self.time_for_vote)+str(self.percent * 100) + '\n')
 
     def get_actual_base(self):
         users_to_send = json.dumps(declare_server.get_nodes_for_base(self.node), cls=AlchemyEncoder)
@@ -225,8 +229,34 @@ class Server:
         tx_data["timestamp"] = time.time()
 
         self.blockchain.add_new_transaction(tx_data)
-
+        self.validate_transaction(tx_data)
         self.announce_new_transaction(tx_data)
+
+    def validate_transaction(self, transaction):
+        if transaction['type'].lower() == 'open':
+            questionid = transaction['content']['questionid']
+            if questionid in self.blockchain.open_surveys:
+                return False
+            self.blockchain.open_surveys[questionid] = transaction['content']
+            return True
+        elif transaction['type'].lower() == 'close':
+            questionid = transaction['content']['questionid']
+            if questionid in self.blockchain.open_surveys and self.blockchain.open_surveys[questionid]['author'] == \
+                    transaction['content']['author'] and self.blockchain.open_surveys[questionid][
+                'status'] == 'opening':
+                self.blockchain.open_surveys[questionid]['status'] = 'closed'
+                return True
+            return False
+        elif transaction['type'].lower() == 'vote':
+            questionid = transaction['content']['questionid']
+            if questionid in self.blockchain.open_surveys and self.blockchain.open_surveys[questionid][
+                'status'] == 'opening':
+                vote = transaction['content']['vote']
+                author = transaction['content']['author']
+                if author not in self.blockchain.open_surveys[questionid]['answers'][vote]:
+                    self.blockchain.open_surveys[questionid]['answers'][vote].append(author)
+                    return True
+                return False
 
     def announce_new_transaction(self, data):
         if not data:
@@ -234,7 +264,6 @@ class Server:
         data_to_send = json.dumps(data)
         for peer in self.node.nodes_outbound:
             try:
-                time.sleep(random.randint(1, 3))
                 self.node.send_to_node(peer, json.dumps(
                     {"command": "-send", "data": data_to_send}))
             except socket.error:
@@ -281,14 +310,16 @@ class Server:
         return "Success"
 
     def check_end(self):
-        voted = 0
 
         for every_vote in self.blockchain.open_surveys.values():
-            for ever_answer in every_vote['answers'].values():
-                voted += ever_answer
-        print(f"Total voted people:{voted}")
-        if voted == (len(self.node.connected_id) - len(self.validators)):
+            if every_vote['status'] == 'opening':
+                for ever_answer in every_vote['answers'].values():
+                    for ever_author in ever_answer:
+                        if ever_author not in self.voted:
+                            self.voted.add(ever_author)
+        if len(self.voted) == (len(self.node.connected_id) - len(self.validators)):
             self.close_survey()
+
 
     def validate_and_add_block(self):
         block_data = self.node.recieved_block.popleft()

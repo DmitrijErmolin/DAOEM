@@ -99,7 +99,10 @@ def connect(logi=None, passwd=None, serv=False):
         conn_node.update({Nodes.is_available: True, Nodes.id: keys[0]})
         session_connect.commit()
         session_connect.close()
-        node = Node(conn_node.one().ip_address, conn_node.one().port, keys[0])
+        if serv:
+            node = Node(conn_node.one().ip_address, conn_node.one().port, keys[0], server_s=True)
+        else:
+            node = Node(conn_node.one().ip_address, conn_node.one().port, keys[0])
         node.start()
         return node
 
