@@ -2,7 +2,6 @@ import rating
 import random
 import declare_server
 import time
-import datetime
 import blockchain
 import socket
 import json
@@ -11,8 +10,6 @@ import threading
 import logging
 import sys
 import coloredlogs
-from collections import deque
-import argparse
 class Client:
     def __init__(self, node):
         self.node = node
@@ -28,9 +25,13 @@ class Client:
         self.sending = False
         self.get_people = False
         self.get_valid = False
+        self.server_id = None
+        self.cheking_block = False
         self.votes = 0
+        self.virus = None
         self.people_voted = set()
         self.already_send = set()
+        self.id_other_valid = []
         self.connect_to_server()
         self.start_listen()
         self.node.recieved_block.clear()
@@ -51,6 +52,7 @@ class Client:
     def connect_to_server(self):
         while self.server_not_found:
             node_server = declare_server.get_server()
+            self.server_id = node_server
             if node_server is not None:
                 logger = logging.getLogger()
                 coloredlogs.install(level='Info', stream=sys.stdout, logger=logger)
@@ -95,6 +97,7 @@ class Client:
         for user in users:
             if user[2] in self.node.other_validators and int(user[0]) not in self.node.connected_id:
                 self.node.connect_with_node(user[1], int(user[2]))
+                self.id_other_valid.append(int(user[0]))
                 for node in self.node.nodes_outbound:
                     if user[1] == node.host and int(user[2]) == node.port:
                         logger_other_val = logging.getLogger()
@@ -147,10 +150,13 @@ class Client:
                             logger_vote.propagate = False
                             coloredlogs.install(level='Info', stream=sys.stdout, logger=logger_vote)
                             logging.info("User %s get vote transaction", self.node.id)
-                            self.people_voted.add(dat['content']['author'])
+                            if dat['content']['author'] not in self.people_voted:
+                                self.people_voted.add(dat['content']['author'])
                             self.blockchain.add_new_transaction(dat)
                             self.votes += 1
-                    if len(self.blockchain.unconfirmed_transactions) >= round(0.15 * self.amount):
+                    if self.node.recieved_block:
+                        self.check_transaction()
+                    elif len(self.blockchain.unconfirmed_transactions) >= round(0.15 * self.amount):
                         self.mine_unconfirmed_transactions()
                     elif len(self.people_voted) == self.amount:
                         self.mine_unconfirmed_transactions()
@@ -158,7 +164,7 @@ class Client:
 
     def listen(self):
         while True:
-            time.sleep(0.5)
+            time.sleep(1)
             if self.node.set_validation_user is False and self.blockchain.unconfirmed_transactions and self.sending is False:
                 send_tranc = threading.Thread(target=self.send_transaction)
                 send_tranc.start()
@@ -188,8 +194,6 @@ class Client:
             if self.blockchain.chain and self.node.set_validation_user is True:
                 if not self.get_valid:
                     self.get_connect_to_validators()
-                if self.node.recieved_block:
-                    self.check_transaction()
 
     def start_listen(self):
         get_tranc_t = threading.Thread(target=self.listen)
@@ -197,7 +201,6 @@ class Client:
         get_block = threading.Thread(target=self.get_block)
         get_block.name = "Get block"
         get_block.start()
-
 
     def get_gen_block(self):
         if self.node.set_validation_user is True:
@@ -241,6 +244,7 @@ class Client:
         if not data:
             return "Invalid data at announce_new_block", 400
         data_to_send = json.dumps(data)
+        time.sleep(1)
         for peer in self.node.nodes_outbound:
             try:
                 self.node.send_to_node(peer, json.dumps(
@@ -252,9 +256,8 @@ class Client:
         bloc = block.Block.fromDict(data)
         if not bloc:
             return "Invalid data at announce_new_block", 400
-        block_to_send = json.dumps(bloc.__dict__)
         for peer in self.node.nodes_outbound:
-            if peer.port in self.node.other_validators:
+            if peer.port in self.node.other_validators and peer.port != 49001:
                 time.sleep(random.randint(0, 2))
                 try:
                     self.node.send_to_node(peer, json.dumps(
@@ -277,9 +280,10 @@ class Client:
 
             if not self.validate_transaction(transaction):
                 continue
+            if self.node.virus:
+                transaction['content']['author'] = self.node.id
 
             new_block.transactions.append(transaction)
-
         self.blockchain.unconfirmed_transactions = []
 
         if (len(new_block.transactions) == 0):
@@ -290,7 +294,7 @@ class Client:
         logger_chain = logging.getLogger()
         logger_chain.propagate = False
         coloredlogs.install(level='Warning', stream=sys.stdout, logger= logger_chain)
-        logging.warning(f"User {self.node.id} added block to chain {self.blockchain.chain}")
+        logging.warning(f"User {self.node.id} make a block, waiting for approve")
         self.announce_new_block(new_block.__dict__)
         result = new_block.index
 
@@ -300,6 +304,8 @@ class Client:
         return "Block #{} is mined.".format(result)
 
     def check_transaction(self):
+        self.cheking_block = True
+        count = 0
         block_data = self.node.recieved_block.popleft()
         bloc = block.Block(block_data["index"],
                            block_data["transactions"],
@@ -308,8 +314,21 @@ class Client:
                            block_data["nonce"])
         for transaction in bloc.transactions:
             if transaction['type'].lower() == "vote":
+                if transaction in self.blockchain.unconfirmed_transactions:
+                    count += 1
+                if int(transaction['content']['author']) in self.id_other_valid:
+                    logger_error_trunc = logging.getLogger()
+                    logger_error_trunc.propagate = False
+                    coloredlogs.install(level='Error', stream=sys.stdout, logger=logger_error_trunc)
+                    logging.error(f"Error while checking, block was discarded")
+                    self.cheking_block = False
+                    return False
                 if transaction['content']['author'] not in self.people_voted:
                     self.people_voted.add(transaction['content']['author'])
+        print(f"User {self.node.id} have {count} similar transactions")
+        proof = block_data['hash']
+        self.validate_and_add_block(bloc, proof)
+        self.cheking_block = False
 
     def validate_transaction(self, transaction):
         if transaction['type'].lower() == 'open':
@@ -335,13 +354,8 @@ class Client:
                     return True
                 return False
 
-    def validate_and_add_block(self):
-        block_data = self.node.recieved_block.popleft()
-        bloc = block.Block(block_data["index"],
-                      block_data["transactions"],
-                      block_data["timestamp"],
-                      block_data["previous_hash"],
-                      block_data["nonce"])
+    def validate_and_add_block(self, bloc, proof):
+
         tmp_open_surveys = self.blockchain.open_surveys
         tmp_chain_code = self.blockchain.chain_code
         if not self.compute_open_surveys(bloc, tmp_open_surveys):
@@ -354,8 +368,7 @@ class Client:
         self.blockchain.open_surveys = tmp_open_surveys
         self.blockchain.chain_code = tmp_chain_code
 
-        proof = block_data['hash']
-        added = self.blockchain.add_block(bloc, proof)
+        added = self.blockchain.added_from_other(bloc, proof)
         if not added:
             logger_discarded_block = logging.getLogger()
             logger_discarded_block.propagate = False
@@ -364,8 +377,8 @@ class Client:
             return "The block was discarded by the node"
         logger_add_block = logging.getLogger()
         logger_add_block.propagate = False
-        coloredlogs.install(level='Info', stream=sys.stdout, logger=logger_add_block)
-        logging.info("User %s added block", self.node.id)
+        coloredlogs.install(level='Warning', stream=sys.stdout, logger=logger_add_block)
+        logging.warning("User %s added block", self.node.id)
         return "Block added to the chain"
 
     def compute_open_surveys(self, blocked, open_surveys):
@@ -393,8 +406,6 @@ class Client:
             else:
                 return False
         return True
-
-
 
 
 if __name__ == '__main__':

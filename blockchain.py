@@ -56,7 +56,6 @@ class Blockchain:
           in the chain match.
         """
         previous_hash = self.last_block.hash
-
         if previous_hash != block.previous_hash:
             return False
         if not Blockchain.is_valid_proof(block, proof):
@@ -65,7 +64,13 @@ class Blockchain:
         block.hash = proof
         self.chain.append(block)
         return True
+    def added_from_other(self, block, proof):
+        if not Blockchain.is_valid_proof(block, proof):
+            return False
 
+        block.hash = proof
+        self.chain.append(block)
+        return True
     def proof_of_work(self, block):
         """
         Function that tries different values of nonce to get a hash

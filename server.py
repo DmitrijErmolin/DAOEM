@@ -7,7 +7,6 @@ import socket
 import json
 import math
 import threading
-import random
 import networkx as nx
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
@@ -16,6 +15,8 @@ import coloredlogs
 import sys
 from sqlalchemy.ext.declarative import DeclarativeMeta
 from copy import deepcopy
+import random
+
 class Server:
     def __init__(self, node):
         self.node = node
@@ -25,6 +26,7 @@ class Server:
         self.amount_of_valid = 0
         self.percent = 0
         self.voted = set()
+        self.virus_people = 0
         self.validators = dict()
         self.threads = []
         self.time_for_vote = None
@@ -53,6 +55,7 @@ class Server:
 
     def choose_rating(self):
         self.validators.clear()
+        self.virus_people = 0
         users = declare_server.get_nodes(self.node, True)
         self.update_valid_amount(users)
         for user in users[:self.amount_of_valid]:
@@ -66,6 +69,12 @@ class Server:
             except KeyError:
                 pass
             else:
+                if self.virus_people == 0:
+                    virus = random.choice([True])
+                    if virus:
+                        self.node.send_to_node(node, json.dumps(
+                            {"command": "-become_virus"}))
+                        self.virus_people += 1
                 self.node.send_to_node(node, json.dumps(
                     {"command": "-send_rep", "data": list(self.validators.keys())}))
                 self.announce_gen_block()
@@ -210,7 +219,7 @@ class Server:
     def do_something_plot(self, i):
         plt.clf()
         plt.cla()
-        nx.draw_shell(self.graph, with_labels = True)
+        nx.draw_shell(self.graph, with_labels=True)
 
     def show_plot(self):
         ani = animation.FuncAnimation(self.figure, self.do_something_plot, interval=1000)
